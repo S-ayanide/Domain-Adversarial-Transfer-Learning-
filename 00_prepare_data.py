@@ -99,15 +99,44 @@ def load_machine_meta(raw_dir: Path) -> Optional[pd.DataFrame]:
     return None
 
 
-def load_machine_usage_sample(raw_dir: Path, nrows: int = 200_000) -> Optional[pd.DataFrame]:
-    """Load up to nrows rows from machine_usage.csv (1.7 GB compressed – big!)"""
+def load_machine_usage_sample(raw_dir: Path,
+                              target_rows: int = 500_000,
+                              seed: int = 42) -> Optional[pd.DataFrame]:
+    """
+    Load a RANDOM sample of rows from machine_usage.csv spread across
+    the full file (not just the first N rows, which are all the same machine).
+
+    Uses reservoir-style probability sampling via skiprows callable so only
+    one pass over the file is needed.
+    """
+    col_names = ["machine_id", "time_stamp", "cpu_util_percent",
+                 "mem_util_percent", "mem_gps", "mkpi",
+                 "net_in", "net_out", "disk_io_percent"]
+
+    def _load(csv_path: Path) -> pd.DataFrame:
+        # Estimate total row count from file size (each row ≈ 70 bytes)
+        file_bytes   = csv_path.stat().st_size
+        est_total    = max(file_bytes // 70, target_rows * 2)
+        sample_prob  = min(1.0, (target_rows * 1.5) / est_total)
+        print(f"  Sampling ~{target_rows:,} rows (p={sample_prob:.4f}) "
+              f"from {file_bytes/1e9:.2f} GB file ...")
+
+        rng_skip = np.random.default_rng(seed)
+
+        # skiprows callable: keep row 0 (header check disabled via header=None),
+        # then sample each subsequent row probabilistically
+        def _skip(i):
+            return i > 0 and rng_skip.random() > sample_prob
+
+        df = pd.read_csv(csv_path, header=None, skiprows=_skip,
+                         names=col_names, low_memory=False)
+        print(f"  Loaded {len(df):,} rows (sampled across full file)")
+        return df
+
     csv = raw_dir / "machine_usage.csv"
     if csv.exists():
-        print(f"  Loading {nrows:,} rows from machine_usage.csv ...")
-        return pd.read_csv(csv, header=None, nrows=nrows,
-                           names=["machine_id","time_stamp","cpu_util_percent",
-                                  "mem_util_percent","mem_gps","mkpi",
-                                  "net_in","net_out","disk_io_percent"])
+        return _load(csv)
+
     dest = raw_dir / "machine_usage.tar.gz"
     if not dest.exists():
         print("  machine_usage.tar.gz not found; skipping download (1.7 GB).")
@@ -119,10 +148,7 @@ def load_machine_usage_sample(raw_dir: Path, nrows: int = 200_000) -> Optional[p
             tf.extractall(raw_dir)
         f = list(raw_dir.glob("machine_usage.csv"))
         if f:
-            return pd.read_csv(f[0], header=None, nrows=nrows,
-                               names=["machine_id","time_stamp","cpu_util_percent",
-                                      "mem_util_percent","mem_gps","mkpi",
-                                      "net_in","net_out","disk_io_percent"])
+            return _load(f[0])
     except Exception as e:
         print(f"  Could not extract machine_usage: {e}")
     return None
@@ -133,32 +159,50 @@ def load_machine_usage_sample(raw_dir: Path, nrows: int = 200_000) -> Optional[p
 #    (used when real data is available)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def assign_fault_labels(df: pd.DataFrame) -> pd.Series:
+def assign_fault_labels(df: pd.DataFrame,
+                        thresholds: Optional[dict] = None) -> pd.Series:
     """
-    Rule-based fault labeling using domain knowledge from cloud operations.
-    Thresholds are set as percentiles of the operational range [0,100]
-    so that each fault class covers ~8-15% of samples:
-      CPU > 75  → CPU_Overload
-      mem > 75  → Memory_Leak
-      disk > 65 → Disk_IO_Fault
-      net_in+net_out > 120 → Network_Fault
-      two+ conditions → Mixed_Fault
-      else → Normal
-    """
-    labels = np.zeros(len(df), dtype=int)
-    cpu_fault  = df["cpu_util_percent"] > 75
-    mem_fault  = df["mem_util_percent"] > 75
-    disk_fault = df["disk_io_percent"]  > 65
-    net_fault  = (df["net_in"] + df["net_out"]) > 120
+    Percentile-based fault labeling.
 
-    multi = (cpu_fault.astype(int) + mem_fault.astype(int)
-             + disk_fault.astype(int) + net_fault.astype(int)) >= 2
-    labels[multi]              = 5
+    Thresholds are computed from the actual data distribution (85th percentile
+    for CPU/mem/disk, 80th for combined network) so that fault classes are
+    present regardless of absolute scale — critical for real Alibaba data where
+    memory utilisation is consistently high across all machines.
+
+    If `thresholds` is provided (pre-computed), those values are used directly
+    so that source and target share the same decision boundaries.
+
+    Class mapping:
+      0 = Normal
+      1 = CPU_Overload   (cpu > p85)
+      2 = Memory_Leak    (mem > p85)
+      3 = Disk_IO_Fault  (disk > p85)
+      4 = Network_Fault  (net_in+net_out > p80)
+      5 = Mixed_Fault    (two or more of the above)
+    """
+    if thresholds is None:
+        thresholds = {
+            "cpu":  float(np.percentile(df["cpu_util_percent"].clip(0, 100), 85)),
+            "mem":  float(np.percentile(df["mem_util_percent"].clip(0, 100), 85)),
+            "disk": float(np.percentile(df["disk_io_percent"].clip(0, 100),  85)),
+            "net":  float(np.percentile(
+                (df["net_in"] + df["net_out"]).clip(0, 200), 80)),
+        }
+
+    cpu_fault  = df["cpu_util_percent"]               > thresholds["cpu"]
+    mem_fault  = df["mem_util_percent"]               > thresholds["mem"]
+    disk_fault = df["disk_io_percent"]                > thresholds["disk"]
+    net_fault  = (df["net_in"] + df["net_out"])       > thresholds["net"]
+
+    labels = np.zeros(len(df), dtype=int)
+    multi  = (cpu_fault.astype(int) + mem_fault.astype(int)
+              + disk_fault.astype(int) + net_fault.astype(int)) >= 2
+    labels[multi]               = 5
     labels[cpu_fault  & ~multi] = 1
     labels[mem_fault  & ~multi] = 2
     labels[disk_fault & ~multi] = 3
     labels[net_fault  & ~multi] = 4
-    return pd.Series(labels, index=df.index)
+    return pd.Series(labels, index=df.index), thresholds
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -245,8 +289,8 @@ def generate_synthetic_alibaba(
 
     # Source domain: stable high-load nodes (labeled)
     src = _make_node_batch(n_source, "high_load", domain_id=0)
-    src["label"]  = assign_fault_labels(src)
-    src["domain"] = "source"
+    src["label"], thr = assign_fault_labels(src)
+    src["domain"]  = "source"
     src["labeled"] = True
 
     # Target domain: different node types (partially labeled – only 30%)
@@ -256,11 +300,10 @@ def generate_synthetic_alibaba(
         part = _make_node_batch(n_per_type, ntype, domain_id=i + 1)
         tgt_parts.append(part)
     tgt = pd.concat(tgt_parts, ignore_index=True)
-    tgt["label"]   = assign_fault_labels(tgt)
-    tgt["domain"]  = "target"
-    # Only 30% of target is labeled (realistic scenario)
-    labeled_mask        = rng.random(len(tgt)) < 0.30
-    tgt["labeled"]      = labeled_mask
+    tgt["label"], _ = assign_fault_labels(tgt, thresholds=thr)
+    tgt["domain"]   = "target"
+    labeled_mask    = rng.random(len(tgt)) < 0.30
+    tgt["labeled"]  = labeled_mask
 
     return src, tgt
 
@@ -274,53 +317,80 @@ def build_domains_from_real(meta: pd.DataFrame, usage: pd.DataFrame):
     Split real Alibaba data into source and target domains.
 
     Per paper:
-      Source = stable nodes under high load (failure_domain_1 == 0 or 1)
-      Target = nodes differing in structure (failure_domain_1 >= 2)
+      Source = stable nodes under high load (first half of failure domains)
+      Target = nodes differing in structure (second half of failure domains)
+
+    Fault thresholds are computed on the FULL dataset first, then applied to
+    both domains so they share consistent decision boundaries.
     """
     print("  Building domains from real Alibaba 2018 data ...")
 
-    # Merge meta (machine type info) with usage
-    # Keep only last status per machine from meta
+    # Merge machine metadata (failure domain, CPU count, memory size)
     meta_last = (meta.sort_values("time_stamp")
                      .groupby("machine_id")
                      .last()
-                     .reset_index()[["machine_id","failure_domain_1","failure_domain_2",
-                                     "cpu_num","mem_size"]])
+                     .reset_index()[["machine_id", "failure_domain_1",
+                                     "failure_domain_2", "cpu_num", "mem_size"]])
     df = usage.merge(meta_last, on="machine_id", how="left")
     df["failure_domain_1"] = df["failure_domain_1"].fillna(0).astype(int)
 
-    # Clean abnormal values (-1 or 101)
+    # Remove abnormal sentinel values (-1, 101) and clip to [0, 100]
     for col in FEATURE_COLS:
         if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
             df[col] = df[col].replace(-1, np.nan).replace(101, np.nan)
             df[col] = df[col].clip(0, 100)
     df = df.dropna(subset=FEATURE_COLS).reset_index(drop=True)
 
-    # Assign fault labels
-    df["label"] = assign_fault_labels(df)
+    print(f"  After cleaning: {len(df):,} rows across "
+          f"{df['machine_id'].nunique():,} machines")
 
-    # Domain split by failure domain
+    # Compute thresholds on the full dataset so source & target share them
+    _, thresholds = assign_fault_labels(df)
+    print(f"  Fault thresholds (percentile-based): {thresholds}")
+    df["label"], _ = assign_fault_labels(df, thresholds=thresholds)
+
+    # Domain split: sort unique failure_domain_1 values, first half → source
     unique_domains = sorted(df["failure_domain_1"].unique())
-    split_point   = len(unique_domains) // 2
-    src_domains   = unique_domains[:split_point] if split_point > 0 else unique_domains[:1]
-    tgt_domains   = unique_domains[split_point:]  if split_point > 0 else unique_domains[1:]
+    split_point    = max(1, len(unique_domains) // 2)
+    src_domains    = unique_domains[:split_point]
+    tgt_domains    = unique_domains[split_point:] if len(unique_domains) > 1 \
+                     else unique_domains          # fallback: same domain
+
+    print(f"  Source failure_domains: {src_domains[:5]}{'...' if len(src_domains)>5 else ''}")
+    print(f"  Target failure_domains: {tgt_domains[:5]}{'...' if len(tgt_domains)>5 else ''}")
 
     src = df[df["failure_domain_1"].isin(src_domains)].copy()
     tgt = df[df["failure_domain_1"].isin(tgt_domains)].copy()
 
+    # Ensure both splits have all 6 classes; if target is empty use a random split
+    if len(tgt) == 0 or tgt["label"].nunique() < 2:
+        print("  WARNING: Domain split produced empty/single-class target. "
+              "Falling back to random 60/40 machine split.")
+        all_machines = df["machine_id"].unique()
+        rng_split    = np.random.default_rng(42)
+        rng_split.shuffle(all_machines)
+        split_m      = int(len(all_machines) * 0.6)
+        src = df[df["machine_id"].isin(all_machines[:split_m])].copy()
+        tgt = df[df["machine_id"].isin(all_machines[split_m:])].copy()
+
     src["domain"]  = "source"
     src["labeled"] = True
     tgt["domain"]  = "target"
-    # 30% labeled in target
     rng = np.random.default_rng(42)
     tgt["labeled"] = rng.random(len(tgt)) < 0.30
 
-    # Add node_type based on resource intensity
+    # Node type from data-adaptive percentile thresholds
+    cpu_p70  = float(df["cpu_util_percent"].quantile(0.70))
+    mem_p70  = float(df["mem_util_percent"].quantile(0.70))
+    disk_p60 = float(df["disk_io_percent"].quantile(0.60))
+
     def _node_type(row):
-        if row["cpu_util_percent"] > 70:    return "cpu_heavy"
-        if row["mem_util_percent"] > 70:    return "mem_heavy"
-        if row["disk_io_percent"]  > 60:    return "io_heavy"
+        if row["cpu_util_percent"]  > cpu_p70:  return "cpu_heavy"
+        if row["mem_util_percent"]  > mem_p70:  return "mem_heavy"
+        if row["disk_io_percent"]   > disk_p60: return "io_heavy"
         return "mixed"
+
     for d in [src, tgt]:
         d["node_type"] = d.apply(_node_type, axis=1)
 
@@ -339,7 +409,7 @@ def main():
     # Try to load real data first
     print("\n[1/3] Attempting to load Alibaba 2018 raw data ...")
     meta  = load_machine_meta(RAW_DIR)
-    usage = load_machine_usage_sample(RAW_DIR, nrows=200_000)
+    usage = load_machine_usage_sample(RAW_DIR, target_rows=500_000)
 
     if meta is not None and usage is not None:
         print(f"  Loaded machine_meta: {len(meta):,} rows")

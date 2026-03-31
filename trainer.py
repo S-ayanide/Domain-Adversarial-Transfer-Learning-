@@ -12,6 +12,7 @@ Handles:
 import json
 import logging
 import time
+import warnings
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -59,20 +60,25 @@ def evaluate(model, X: np.ndarray, y: np.ndarray, n_classes: int) -> dict:
         probs  = torch.softmax(logits, dim=1).cpu().numpy()
     preds = probs.argmax(axis=1)
 
-    acc  = accuracy_score(y, preds)
-    f1   = f1_score(y, preds, average="macro", zero_division=0)
-    # AUC: one-vs-rest; handle missing classes gracefully
+    acc = accuracy_score(y, preds)
+    f1  = f1_score(y, preds, average="macro", zero_division=0)
+
+    # AUC: suppress sklearn's single-class warning; return nan when undefined
     present = np.unique(y)
     if len(present) < 2:
         auc = float("nan")
-    elif n_classes == 2:
-        auc = roc_auc_score(y, probs[:, 1])
     else:
-        try:
-            auc = roc_auc_score(y, probs, multi_class="ovr",
-                                average="macro", labels=list(range(n_classes)))
-        except ValueError:
-            auc = float("nan")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                if n_classes == 2:
+                    auc = roc_auc_score(y, probs[:, 1])
+                else:
+                    auc = roc_auc_score(y, probs, multi_class="ovr",
+                                        average="macro",
+                                        labels=list(range(n_classes)))
+            except ValueError:
+                auc = float("nan")
 
     return {"accuracy": acc, "f1": f1, "auc": auc}
 
