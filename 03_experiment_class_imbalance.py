@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 HIDDEN_DIM     = 128
 DROPOUT        = 0.3
-EPOCHS         = 80
+EPOCHS         = 150
 LR             = 1e-3
 BATCH_SIZE     = 256
 IMBALANCE_RATIOS = [1, 2, 5, 10, 20]   # Figure 3 x-axis

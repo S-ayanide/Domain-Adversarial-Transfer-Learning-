@@ -27,7 +27,7 @@ from models import DATL, DANN, CDAN, FixBi, ToAlign, grl_alpha
 
 logger = logging.getLogger(__name__)
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cuda")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

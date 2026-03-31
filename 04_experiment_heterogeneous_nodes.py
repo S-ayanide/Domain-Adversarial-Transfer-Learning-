@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 HIDDEN_DIM = 128
 DROPOUT    = 0.3
-EPOCHS     = 80
+EPOCHS     = 150
 LR         = 1e-3
 BATCH_SIZE = 256
 

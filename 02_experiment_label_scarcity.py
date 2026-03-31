@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # ─── Hyper-parameters ─────────────────────────────────────────────────────────
 HIDDEN_DIM   = 128
 DROPOUT      = 0.3
-EPOCHS       = 80
+EPOCHS       = 150
 LR           = 1e-3
 BATCH_SIZE   = 256
 LABEL_RATIOS = [0.10, 0.20, 0.30, 0.50, 0.70, 1.00]   # Figure 2 x-axis

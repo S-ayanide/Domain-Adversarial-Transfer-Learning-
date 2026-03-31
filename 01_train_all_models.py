@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 # ─── Hyper-parameters ─────────────────────────────────────────────────────────
 HIDDEN_DIM = 128
 DROPOUT    = 0.3
-EPOCHS     = 100
+EPOCHS     = 200
 LR         = 1e-3
 BATCH_SIZE = 256
 LAMBDA_ADV = 0.1    # adversarial weight for baselines
