@@ -1,0 +1,54 @@
+{
+  "DATL (Ours)": [
+    {
+      "node_type": "cpu_heavy",
+      "accuracy": 0.967,
+      "f1": 0.9629944861784405,
+      "auc": NaN
+    },
+    {
+      "node_type": "mem_heavy",
+      "accuracy": 0.9625,
+      "f1": 0.9582070140332488,
+      "auc": NaN
+    },
+    {
+      "node_type": "io_heavy",
+      "accuracy": 0.79,
+      "f1": 0.7532955183382359,
+      "auc": NaN
+    },
+    {
+      "node_type": "mixed",
+      "accuracy": 0.851,
+      "f1": 0.8324186459112416,
+      "auc": 0.9899814491589704
+    }
+  ],
+  "DANN": [
+    {
+      "node_type": "cpu_heavy",
+      "accuracy": 0.9585,
+      "f1": 0.9531652265914301,
+      "auc": NaN
+    },
+    {
+      "node_type": "mem_heavy",
+      "accuracy": 0.976,
+      "f1": 0.9737962659679005,
+      "auc": NaN
+    },
+    {
+      "node_type": "io_heavy",
+      "accuracy": 0.791,
+      "f1": 0.7661371656514647,
+      "auc": NaN
+    },
+    {
+      "node_type": "mixed",
+      "accuracy": 0.8135,
+      "f1": 0.7826358353206238,
+      "auc": 0.9870961225874625
+    }
+  ]
+}
