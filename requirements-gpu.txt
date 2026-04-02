@@ -1,6 +1,11 @@
-# PyTorch — install the CUDA 12.8 nightly for Blackwell (sm_120) GPU support:
-# pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
-torch>=2.0.0
+--pre
+--index-url https://download.pytorch.org/whl/nightly/cu128
+--extra-index-url https://pypi.org/simple/
+
+# PyTorch (Blackwell sm_120 support via CUDA 12.8 nightly)
+torch
+torchvision
+torchaudio
 
 # Core scientific stack
 numpy>=1.24.0
