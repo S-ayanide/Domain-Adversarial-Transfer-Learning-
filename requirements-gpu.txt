@@ -1,6 +1,7 @@
 --pre
 --index-url https://download.pytorch.org/whl/nightly/cu128
 --extra-index-url https://pypi.org/simple/
+# Run as: /opt/conda/bin/pip install -r requirements-gpu.txt
 
 # PyTorch (Blackwell sm_120 support via CUDA 12.8 nightly)
 torch
